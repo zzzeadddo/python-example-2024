@@ -328,11 +328,11 @@ def compress_image(file, output_dir, quality=85, max_size=(640, 640)):
     return size_mapping
 
 
-def process_images_with_yolo(model_path, input_folder, output_base_folder, text_crop_folder_base, size_mapping, thresholds, classification_model, file_namezeze, file):
-    # 使用YOLO模型处理图像
+def process_images_with_yolo(model_path, input_folder, output_base_folder, text_crop_folder_base, size_mapping,
+                             thresholds, classification_model, file_namezeze, file):
     model = YOLOv10(model_path)  # 加载YOLO模型
 
-    lead_labels = [  # 定义导联标签
+    lead_labels = [
         ["I", "II", "III"],
         ["aVR", "aVL", "aVF"],
         ["V1", "V2", "V3"],
@@ -342,106 +342,118 @@ def process_images_with_yolo(model_path, input_folder, output_base_folder, text_
     for filename in os.listdir(input_folder):  # 遍历输入文件夹中的所有文件
         if filename.endswith(('.png', '.jpg', '.jpeg')):  # 检查文件是否为图像文件
             image_path = os.path.join(input_folder, filename)  # 获取图像文件路径
+            print(f"Processing file: {image_path}")
+
+            if not os.path.exists(image_path):
+                print(f"File not found: {image_path}")
+                continue
+
             subfolder = create_subfolder(output_base_folder, filename)  # 创建子文件夹
             text_crop_subfolder = create_subfolder(text_crop_folder_base, filename)  # 创建文本裁剪子文件夹
-            # annotated_subfolder = create_subfolder(annotated_folder_base, filename)  # 创建注释子文件夹
 
-            best_threshold = None  # 初始化最佳阈值
-            max_min_count = 0  # 初始化最大最小计数
+            best_threshold = None
+            max_min_count = 0
 
-            for threshold in thresholds:  # 遍历所有阈值
-                results = model.predict(image_path, conf=threshold)  # 使用YOLO模型预测图像
+            for threshold in thresholds:
+                results = model.predict(image_path, conf=threshold)
 
-                leads = []  # 初始化导联框列表
-                texts = []  # 初始化文本框列表
+                leads = []
+                texts = []
 
-                for result in results[0].boxes.data:  # 遍历预测结果
+                for result in results[0].boxes.data:
                     if result[5] == 0.0:
-                        leads.append(result)  # 添加到导联框列表
+                        leads.append(result)
                     elif result[5] == 1.0:
-                        texts.append(result)  # 添加到文本框列表
+                        texts.append(result)
 
-                min_count = max(len(leads), len(texts))  # 获取最小计数
+                min_count = max(len(leads), len(texts))
 
-                if min_count > max_min_count:  # 更新最大最小计数和最佳阈值
+                if min_count > max_min_count:
                     max_min_count = min_count
                     best_threshold = threshold
-                print(f"Threshold: {threshold} -maxmincount: {max_min_count} for {filename}")
+                print(f"Threshold: {threshold} - maxmincount: {max_min_count} for {filename}")
 
-            if best_threshold is not None:  # 如果找到最佳阈值，使用该阈值重新预测图像
+            if best_threshold is not None:
                 print(f"Best threshold for {filename}: {best_threshold} with min_count: {max_min_count}")
                 results = model.predict(image_path, conf=best_threshold)
 
-                results[0].boxes.data = non_max_suppression(results[0].boxes.data.tolist(), overlap_threshold=0.8)  # 非极大值抑制
+                results[0].boxes.data = non_max_suppression(results[0].boxes.data.tolist(), overlap_threshold=0.8)
 
-                leads = []  # 重新初始化导联框列表
-                texts = []  # 重新初始化文本框列表
+                leads = []
+                texts = []
 
-                for result in results[0].boxes.data:  # 遍历预测结果
+                for result in results[0].boxes.data:
                     if result[5] == 0.0:
-                        leads.append(result)  # 添加到导联框列表
+                        leads.append(result)
                     elif result[5] == 1.0:
-                        texts.append(result)  # 添加到文本框列表
+                        texts.append(result)
 
-                max_min_count = max(len(leads), len(texts))  # 获取最大最小计数
+                max_min_count = max(len(leads), len(texts))
                 print(f"0.8的max_min_count: {max_min_count}")
-                leads = leads[:max_min_count]  # 截取导联框列表
-                texts = texts[:max_min_count]  # 截取文本框列表
+                leads = leads[:max_min_count]
+                texts = texts[:max_min_count]
 
                 print(f"Threshold: {best_threshold} - Leads: {len(leads)}, Texts: {len(texts)} for {filename}")
 
-                proportional_boxes = []  # 初始化比例框列表
-                mapped_boxes = []  # 初始化映射框列表
+                proportional_boxes = []
+                mapped_boxes = []
 
-                original_size, compressed_size = size_mapping[filename]  # 获取原始和压缩后的图像大小
+                original_size, compressed_size = size_mapping[filename]
 
-                lead_widths = []  # 初始化导联框宽度列表
-                text_widths = []  # 初始化文本框宽度列表
+                lead_widths = []
+                text_widths = []
 
-                for result in results[0].boxes.data:  # 遍历预测结果
-                    x1, y1, x2, y2 = result[:4]  # 获取边界框坐标
-                    confidence = result[4]  # 获取置信度
-                    class_id = int(result[5])  # 获取类别ID
+                for result in results[0].boxes.data:
+                    x1, y1, x2, y2 = result[:4]
+                    confidence = result[4]
+                    class_id = int(result[5])
 
-                    x1_ratio = x1 / compressed_size[0]  # 计算边界框坐标比例
+                    x1_ratio = x1 / compressed_size[0]
                     y1_ratio = y1 / compressed_size[1]
                     x2_ratio = x2 / compressed_size[0]
                     y2_ratio = y2 / compressed_size[1]
 
-                    proportional_boxes.append((x1_ratio, y1_ratio, x2_ratio, y2_ratio, confidence, class_id))  # 添加到比例框列表
+                    proportional_boxes.append((x1_ratio, y1_ratio, x2_ratio, y2_ratio, confidence, class_id))
 
-                    x1_mapped = x1_ratio * original_size[0]  # 映射边界框坐标到原始图像大小
+                    x1_mapped = x1_ratio * original_size[0]
                     y1_mapped = y1_ratio * original_size[1]
                     x2_mapped = x2_ratio * original_size[0]
                     y2_mapped = y2_ratio * original_size[1]
 
-                    mapped_boxes.append((x1_mapped, y1_mapped, x2_mapped, y2_mapped, confidence, class_id))  # 添加到映射框列表
+                    mapped_boxes.append((x1_mapped, y1_mapped, x2_mapped, y2_mapped, confidence, class_id))
 
-                    box_width = x2_mapped - x1_mapped  # 计算边界框宽度
+                    box_width = x2_mapped - x1_mapped
                     if class_id == 0:
-                        lead_widths.append(box_width)  # 添加到导联框宽度列表
+                        lead_widths.append(box_width)
                     elif class_id == 1:
-                        text_widths.append(box_width)  # 添加到文本框宽度列表
+                        text_widths.append(box_width)
 
-                min_x1 = min([box[0] for box in mapped_boxes])  # 获取最小x1坐标
-                max_x2 = max([box[2] for box in mapped_boxes])  # 获取最大x2坐标
-                column_width = (max_x2 - min_x1) / 4  # 计算每列宽度
+                min_x1 = min([box[0] for box in mapped_boxes])
+                max_x2 = max([box[2] for box in mapped_boxes])
+                column_width = (max_x2 - min_x1) / 4
 
-                columns = [[] for _ in range(4)]  # 初始化列列表
-                text_boxes = []  # 初始化文本框列表
+                columns = [[] for _ in range(4)]
+                text_boxes = []
 
-                for box in mapped_boxes:  # 遍历映射框
-                    center_x = (box[0] + box[2]) / 2  # 计算中心x坐标
-                    center_y = (box[1] + box[3]) / 2  # 计算中心y坐标
+                for box in mapped_boxes:
+                    center_x = (box[0] + box[2]) / 2
+                    center_y = (box[1] + box[3]) / 2
                     if box[5] == 0:
-                        col_index = int((center_x - min_x1) / column_width)  # 计算列索引
-                        col_index = min(col_index, 3)  # 防止索引越界
-                        columns[col_index].append((center_y, box, center_x, center_y))  # 添加到列中
+                        col_index = int((center_x - min_x1) / column_width)
+                        col_index = min(col_index, 3)
+                        columns[col_index].append((center_y, box, center_x, center_y))
                     else:
-                        text_boxes.append((center_y, box, center_x, center_y))  # 添加到文本框列表
+                        text_boxes.append((center_y, box, center_x, center_y))
 
-                original_image_path = os.path.join(input_folder.replace(file_namezeze, '').replace('\\compressed', ''), filename)  # 获取原始图像路径
-                original_image = Image.open(original_image_path)  # 打开原始图像
+                original_image_path = os.path.join(input_folder.replace(file_namezeze, '').replace('\\compressed', ''),
+                                                   filename)
+                print(f"Original image path: {original_image_path}")
+
+                if not os.path.exists(original_image_path):
+                    print(f"Original file not found: {original_image_path}")
+                    continue
+
+                original_image = Image.open(original_image_path)
                 # empty_image = Image.new("RGB", original_image.size, "white")  # 创建空白图像
                 # draw_original = ImageDraw.Draw(original_image)  # 创建原始图像的绘图对象
                 # draw_empty = ImageDraw.Draw(empty_image)  # 创建空白图像的绘图对象
