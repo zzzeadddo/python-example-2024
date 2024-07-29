@@ -445,8 +445,9 @@ def process_images_with_yolo(model_path, input_folder, output_base_folder, text_
                     else:
                         text_boxes.append((center_y, box, center_x, center_y))
 
-                original_image_path = os.path.join(input_folder.replace(file_namezeze, '').replace('\\compressed', ''),
-                                                   filename)
+                # original_image_path = os.path.join(input_folder.replace(file_namezeze, '').replace('\\compressed', ''),
+                #                                    filename)
+                original_image_path = os.path.join(os.path.dirname(os.path.dirname(input_folder)), filename)
                 print(f"Original image path: {original_image_path}")
 
                 if not os.path.exists(original_image_path):
