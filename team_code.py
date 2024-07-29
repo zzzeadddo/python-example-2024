@@ -110,148 +110,124 @@ def load_models(model_folder, verbose):
 # Run your trained digitization model. This function is *required*. You should edit this function to add your code, but do *not*
 # change the arguments of this function. If you did not train one of the models, then you can return None for the model.
 def run_models(record, digitization_model, classification_model, verbose):
-    base_path = record
+    try:
+        # Load the dimensions of the signal.
+        header_file = get_header_file(record)
+        header = load_text(header_file)
+        num_samples = get_num_samples(header)
+        num_signals = get_num_signals(header)
+        print(f"Number of samples: {num_samples}, number of signals: {num_signals}")
 
-    # 提取 base directory
-    base_directory = os.path.dirname(base_path)
+        base_path = record
+        base_directory = os.path.dirname(base_path)
+        file_namezeze = os.path.basename(base_path)
 
-    # 提取路径的最后一个文件名
-    file_namezeze = os.path.basename(base_path)
+        search_pattern = os.path.join(base_directory, f'*{file_namezeze}*')
+        files = [f for f in glob.glob(search_pattern) if f.lower().endswith(('.jpg', '.jpeg', '.png', 'tiff'))]
 
-    # 搜索文件名中含有最后一个文件名部分的图片
-    search_pattern = os.path.join(base_directory, f'*{file_namezeze}*')
-    files = [f for f in glob.glob(search_pattern) if f.lower().endswith(('.jpg', '.jpeg', '.png', 'tiff'))]
+        if not files:
+            raise FileNotFoundError("No files found matching the pattern.")
 
-    if not files:
-        print("No files found matching the pattern.")
-        return
+        random.shuffle(files)
+        file_to_process = files[0]
+        process_image(file_to_process)
+        output_folder_base = os.path.join(base_path, "compressed")
+        processed_output_folder_base = os.path.join(base_path, "processed")
+        text_crop_folder_base = os.path.join(base_path, "text_crops")
 
-    # 随机打乱文件列表
-    random.shuffle(files)
+        model_path = digitization_model['yolo_model']
+        classification_model = tf.keras.models.load_model(digitization_model['classification_model'])
 
-    # 选择第一个文件进行处理
-    file_to_process = files[0]
-    # with concurrent.futures.ThreadPoolExecutor() as executor:
-    #     executor.submit(process_image, file_to_process)
-    process_image(file_to_process)
-    output_folder_base = os.path.join(base_path, "compressed")
-    processed_output_folder_base = os.path.join(base_path, "processed")
-    text_crop_folder_base = os.path.join(base_path, "text_crops")
+        size_mapping = compress_image(file_to_process, output_folder_base)
+        start, end, step = 0.05, 0.85, 0.05
+        thresholds = [i for i in np.arange(start, end + step, step)]
 
-    model_path = digitization_model['yolo_model']
-    classification_model = tf.keras.models.load_model(digitization_model['classification_model'])
+        process_images_with_yolo(model_path, output_folder_base, processed_output_folder_base, text_crop_folder_base,
+                                 size_mapping, thresholds, classification_model, file_namezeze, file_to_process)
 
-    size_mapping = compress_image(file_to_process, output_folder_base)
-    # 设置阈值范围
-    start = 0.05
-    end = 0.85
-    step = 0.05
-    thresholds = [i for i in np.arange(start, end + step, step)]
+        print("All images have been compressed and processed successfully.")
 
-    # 使用 YOLO 处理图像
-    process_images_with_yolo(model_path, output_folder_base, processed_output_folder_base, text_crop_folder_base,
-                             size_mapping, thresholds, classification_model, file_namezeze, file_to_process)
+        TILE_SIZE = 256
+        DEEP_NETWORK_NAME = "DPLinkNet34"
 
+        subdirs = [os.path.join(processed_output_folder_base, subdir) for subdir in
+                   os.listdir(processed_output_folder_base)
+                   if os.path.isdir(os.path.join(processed_output_folder_base, subdir))]
 
-    print("All images have been compressed and processed successfully.")
+        for img_indir in subdirs:
+            print("Image input directory:", img_indir)
+            img_outdir = os.path.join(img_indir, "Binarized")
+            os.makedirs(img_outdir, exist_ok=True)
+            print("Image output directory:", img_outdir)
 
-    TILE_SIZE = 256
-    DATA_NAME = "DIBCO"  # BickleyDiary, DIBCO, PLM
-    DEEP_NETWORK_NAME = "DPLinkNet34"  # LinkNet34, DLinkNet34, DPLinkNet34
+            img_list = sorted(os.listdir(img_indir))
 
-    # 使用基准目录设定输入输出目
+            solver = TTAFrame(DPLinkNet34)
+            weights_path = digitization_model['linknet_model']
+            print("Now loading the model weights:", weights_path)
+            solver.load(weights_path)
 
-    # 获取所有子目录
-    subdirs = [os.path.join(processed_output_folder_base, subdir) for subdir in os.listdir(processed_output_folder_base)
-               if os.path.isdir(os.path.join(processed_output_folder_base, subdir))]
+            for idx, img_name in enumerate(img_list):
+                if os.path.isdir(os.path.join(img_indir, img_name)):
+                    continue
 
-    for img_indir in subdirs:
-        print("Image input directory:", img_indir)
+                print("Now processing image:", img_name)
+                fname, _ = os.path.splitext(img_name)
+                img_input = os.path.join(img_indir, img_name)
+                img_output = os.path.join(img_outdir, f"{fname}-{DEEP_NETWORK_NAME}.tiff")
 
-        img_outdir = os.path.join(img_indir, "Binarized")
-        if not os.path.exists(img_outdir):
-            os.makedirs(img_outdir)
-        print("Image output directory:", img_outdir)
+                img = cv2.imread(img_input)
+                if img is None:
+                    print(f"Error reading image {img_input}, skipping...")
+                    continue
 
-        img_list = os.listdir(img_indir)
-        img_list.sort()
+                img, original_size = pad_image(img, TILE_SIZE)
+                locations, patches = get_patches_dynamic(img, TILE_SIZE)
+                masks = [solver.test_one_img_from_path(patch) for patch in patches]
+                prediction = stitch_together(locations, masks, tuple(img.shape[0:2]), TILE_SIZE, TILE_SIZE)
+                prediction[prediction >= 5.0] = 255
+                prediction[prediction < 5.0] = 0
+                prediction = unpad_image(prediction, original_size)
+                cv2.imwrite(img_output, prediction.astype(np.uint8))
 
-        solver = TTAFrame(DPLinkNet34)
-        # 设定权重文件路径
-        weights_path = digitization_model['linknet_model']
-        print("Now loading the model weights:", weights_path)
-        solver.load(weights_path)
+            print("Finished processing directory:", img_indir)
 
-        for idx in range(len(img_list)):
-            if os.path.isdir(os.path.join(img_indir, img_list[idx])):
+        print("All directories have been processed successfully.")
+
+        processed_output_folder_base = os.path.join(base_path, "processed")
+        subdirs = [os.path.join(processed_output_folder_base, subdir) for subdir in
+                   os.listdir(processed_output_folder_base)
+                   if os.path.isdir(os.path.join(processed_output_folder_base, subdir))]
+
+        for img_indir in subdirs:
+            input_folder_path = os.path.join(img_indir, 'Binarized')
+            units_info_path = os.path.join(img_indir, 'units_info.json')
+
+            if not os.path.exists(input_folder_path) or not os.path.exists(units_info_path):
+                print(f"Required paths do not exist in {img_indir}")
                 continue
 
-            print("Now processing image:", img_list[idx])
-            fname, fext = os.path.splitext(img_list[idx])
-            img_input = os.path.join(img_indir, img_list[idx])
-            img_output = os.path.join(img_outdir, fname + "-" + DEEP_NETWORK_NAME + ".tiff")
+            with open(units_info_path, 'r') as file:
+                units_info = json.load(file)
 
-            img = cv2.imread(img_input)
-            if img is None:
-                print(f"Error reading image {img_input}, skipping...")
-                continue
+            processed_images = process_all_images_in_folder(input_folder_path)
+            lead_counter = {}
 
-            img, original_size = pad_image(img, TILE_SIZE)
-            locations, patches = get_patches_dynamic(img, TILE_SIZE)
-            masks = []
-            for idy in range(len(patches)):
-                msk = solver.test_one_img_from_path(patches[idy])
-                masks.append(msk)
-            prediction = stitch_together(locations, masks, tuple(img.shape[0:2]), TILE_SIZE, TILE_SIZE)
-            prediction[prediction >= 5.0] = 255
-            prediction[prediction < 5.0] = 0
-            prediction = unpad_image(prediction, original_size)
-            cv2.imwrite(img_output, prediction.astype(np.uint8))
+            for filename, img in processed_images:
+                extract_and_save_ecg_signal(img, filename, input_folder_path, units_info, num_samples, lead_counter)
 
-        print("Finished processing directory:", img_indir)
+            grouped_folder = os.path.join(input_folder_path, 'Grouped')
+            group_and_rename_files(os.path.join(input_folder_path, 'Digitalization'), grouped_folder)
+            integrated_signal = integrate_grouped_files_to_p_signal(grouped_folder, input_folder_path)
 
-    print("All directories have been processed successfully.")
+        signal = integrated_signal
+        labels = None
 
-    # # Load the dimensions of the signal.
-    header_file = get_header_file(record)
-    header = load_text(header_file)
-
-    num_samples = get_num_samples(header)
-    num_signals = get_num_signals(header)
-    print(f"Number of samples: {num_samples}, number of signals: {num_signals}")
-
-    processed_output_folder_base = os.path.join(base_path, "processed")
-    subdirs = [os.path.join(processed_output_folder_base, subdir) for subdir in os.listdir(processed_output_folder_base)
-               if os.path.isdir(os.path.join(processed_output_folder_base, subdir))]
-
-    for img_indir in subdirs:
-        input_folder_path = os.path.join(img_indir, 'Binarized')
-        units_info_path = os.path.join(img_indir, 'units_info.json')
-        # 检查路径是否存在
-        if not os.path.exists(input_folder_path):
-            print(f"Input folder path does not exist: {input_folder_path}")
-            continue
-
-        if not os.path.exists(units_info_path):
-            print(f"Units info path does not exist: {units_info_path}")
-            continue
-        # 读取 units_info.json 文件
-        with open(units_info_path, 'r') as file:
-            units_info = json.load(file)
-
-        processed_images = process_all_images_in_folder(input_folder_path)
-
-        lead_counter = {}
-
-        for filename, img in processed_images:
-            extract_and_save_ecg_signal(img, filename, input_folder_path, units_info, num_samples, lead_counter)
-
-        grouped_folder = os.path.join(input_folder_path, 'Grouped')
-        group_and_rename_files(os.path.join(input_folder_path, 'Digitalization'), grouped_folder)
-        integrated_signal = integrate_grouped_files_to_p_signal(grouped_folder, input_folder_path)
-
-    signal = integrated_signal
-    labels = None
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        print("Returning zero matrix due to error.")
+        signal = np.zeros((num_samples, num_signals))
+        labels = None
 
     return signal, labels
 
