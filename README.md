@@ -1,3 +1,57 @@
+Here is the translated and more polite version of the `README.md` file:
+
+```markdown
+# Update Notice
+
+Dear Organizing Committee,
+
+Hello! Thank you for your continuous support and guidance. I have resubmitted the evaluation request, and this update only involves improvements to the `team_code.py` file. To facilitate testing and improve efficiency, you can use the previously built Docker image directly without rebuilding it. Simply update the latest `~/example/python-example-2024/team_code.py` to `/challenge/team_code.py`.
+
+## Docker Run Command
+
+```bash
+docker run -it \
+  -v ~/example/model:/challenge/model \
+  -v ~/example/test_data:/challenge/test_data \
+  -v ~/example/test_outputs:/challenge/test_outputs \
+  -v ~/example/training_data:/challenge/training_data \
+  -v ~/example/python-example-2024/team_code.py:/challenge/team_code.py \
+  image bash
+```
+
+### Explanation
+
+- The focus of this submission is to optimize `team_code.py`. Please mount the updated file to the container to directly verify the code improvements.
+- This approach can effectively save time and improve testing efficiency.
+
+I sincerely appreciate your support and look forward to you testing our latest code. As the competition is nearing its end, I am eager to see if these improvements bring positive results. If you have any questions or need further information, please feel free to contact me.
+
+Best regards,  
+The TimeBeater Team
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # Python example code for the George B. Moody PhysioNet Challenge 2024
 
 ## What's in this repository?
