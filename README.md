@@ -1,6 +1,3 @@
-Here is the translated and more polite version of the `README.md` file:
-
-```markdown
 # Update Notice
 
 Dear Organizing Committee,
