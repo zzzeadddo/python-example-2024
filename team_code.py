@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-
 # Edit this script to add your team's code. Some functions are *required*, but you can edit most parts of the required functions,
 # change or remove non-required functions, and add your own functions.
 
@@ -30,6 +29,8 @@ import glob
 import json
 import random
 from sklearn.linear_model import LinearRegression
+from scipy.signal import savgol_filter
+from scipy import signal as sig
 ################################################################################
 #
 # Required functions. Edit these functions to add your code, but do not change the arguments of the functions.
@@ -218,7 +219,7 @@ def run_models(record, digitization_model, classification_model, verbose):
 
             grouped_folder = os.path.join(input_folder_path, 'Grouped')
             group_and_rename_files(os.path.join(input_folder_path, 'Digitalization'), grouped_folder)
-            integrated_signal = integrate_grouped_files_to_p_signal(grouped_folder, input_folder_path)
+            integrated_signal = integrate_grouped_files_to_p_signal(grouped_folder, input_folder_path, num_samples)
 
         signal = integrated_signal
         labels = None
@@ -228,6 +229,12 @@ def run_models(record, digitization_model, classification_model, verbose):
         print("Returning zero matrix due to error.")
         signal = np.zeros((num_samples, num_signals))
         labels = None
+
+    # 添加这个检查
+    if signal.shape != (num_samples, num_signals):
+        print(f"Warning: Signal shape {signal.shape} doesn't match expected shape ({num_samples}, {num_signals})")
+        print("Replacing with zero matrix.")
+        signal = np.zeros((num_samples, num_signals))
 
     return signal, labels
 
@@ -353,7 +360,7 @@ def process_images_with_yolo(model_path, input_folder, output_base_folder, text_
                 print(f"Best threshold for {filename}: {best_threshold} with min_count: {max_min_count}")
                 results = model.predict(image_path, conf=best_threshold)
 
-                results[0].boxes.data = non_max_suppression(results[0].boxes.data.tolist(), overlap_threshold=0.8)
+                results[0].boxes.data = non_max_suppression(results[0].boxes.data.tolist(), overlap_threshold=0.7)
 
                 leads = []
                 texts = []
@@ -715,20 +722,25 @@ def create_subfolder(base_folder, filename):
         os.makedirs(subfolder)
     return subfolder
 
-def non_max_suppression(boxes, overlap_threshold=0.98):
-    # 非极大值抑制，移除重叠的边界框
-    if len(boxes) == 0:  # 如果没有边界框，返回空列表
+
+def non_max_suppression(boxes, overlap_threshold=0.8):
+    if len(boxes) == 0:
         return []
 
-    boxes = sorted(boxes, key=lambda x: x[4], reverse=True)  # 按照置信度排序
+    # 计算每个框的面积
+    areas = [(box[2] - box[0]) * (box[3] - box[1]) for box in boxes]
 
-    picked_boxes = []  # 选择的边界框列表
-    while boxes:
-        current_box = boxes.pop(0)  # 取出置信度最高的边界框
-        picked_boxes.append(current_box)
-        boxes = [box for box in boxes if box[5] != current_box[5] or box_iou(current_box, box) < overlap_threshold]  # 移除与当前边界框重叠的边界框
+    # 按面积降序排序
+    order = sorted(range(len(boxes)), key=lambda i: areas[i], reverse=True)
 
-    return picked_boxes  # 返回选择的边界框
+    keep = []
+    while order:
+        i = order.pop(0)
+        keep.append(boxes[i])
+
+        order = [j for j in order if boxes[j][5] != boxes[i][5] or box_iou(boxes[i], boxes[j]) < overlap_threshold]
+
+    return keep
 
 def calculate_units(width_in_pixels, time_in_seconds=2.5, dpi=200):
     # 计算像素单位
@@ -914,8 +926,11 @@ def unpad_image(image, original_size):
     h, w = original_size
     return image[:h, :w]  # 截取填充前的图像部分
 
+
 def resize_and_pad(signal, target_length, pad_value=np.nan, position='start'):
-    resized_signal = cv2.resize(signal.reshape(-1, 1), (1, target_length), interpolation=cv2.INTER_LINEAR).flatten()
+    # 使用scipy的resample函数进行重采样，这可以更好地保持信号的频率特性
+    resized_signal = sig.resample(signal, target_length)
+
     padding = np.full(target_length, pad_value)
     if position == 'start':
         combined = np.concatenate([resized_signal, padding, padding, padding])
@@ -929,19 +944,21 @@ def resize_and_pad(signal, target_length, pad_value=np.nan, position='start'):
         combined = resized_signal
     return combined
 
+
 def process_ecg_signal(signal, lead_type, numsamples):
     quarter_samples = numsamples // 4
-    if lead_type in ["I", "II", "III"]:
-        return resize_and_pad(signal, quarter_samples, position='start')
-    elif lead_type in ["aVR", "aVL", "aVF"]:
-        return resize_and_pad(signal, quarter_samples, position='middle')
-    elif lead_type in ["V1", "V2", "V3"]:
-        return resize_and_pad(signal, quarter_samples, position='third')
-    elif lead_type in ["V4", "V5", "V6"]:
-        return resize_and_pad(signal, quarter_samples, position='end')
-    else:
-        return cv2.resize(signal.reshape(-1, 1), (1, numsamples), interpolation=cv2.INTER_LINEAR).flatten()
 
+    filtered_signal = signal
+    if lead_type in ["I", "II", "III"]:
+        return resize_and_pad(filtered_signal, quarter_samples, position='start')
+    elif lead_type in ["aVR", "aVL", "aVF"]:
+        return resize_and_pad(filtered_signal, quarter_samples, position='middle')
+    elif lead_type in ["V1", "V2", "V3"]:
+        return resize_and_pad(filtered_signal, quarter_samples, position='third')
+    elif lead_type in ["V4", "V5", "V6"]:
+        return resize_and_pad(filtered_signal, quarter_samples, position='end')
+    else:
+        return sig.resample(filtered_signal, numsamples)
 def calculate_adaptive_threshold(img):
     height, width = img.shape
     initial_threshold = (height * width) * 0.001
@@ -1024,7 +1041,6 @@ def extract_and_save_ecg_signal(image, filename, output_folder, units_info, nums
         return
     centerline_distance = float(match_ratio.group(1))
 
-
     # 更新lead_counter
     if lead_type not in lead_counter:
         lead_counter[lead_type] = 0
@@ -1042,27 +1058,22 @@ def extract_and_save_ecg_signal(image, filename, output_folder, units_info, nums
         path = np.full(width, np.nan)
 
         for col in range(width):
-            max_distance = 0
-            min_distance = height
-            farthest_row = center_y
-            closest_row = center_y
-            found = False
-            for row in range(2, height - 3):
-                if img[row, col] > 0:
-                    distance = abs(row - center_y)
-                    if distance > max_distance:
-                        max_distance = distance
-                        farthest_row = row
-                    if distance < min_distance:
-                        min_distance = distance
-                        closest_row = row
-                    found = True
-            if found:
-                if col < width * 0.2:
-                    path[col] = farthest_row if farthest_row < center_y else closest_row
-                else:
-                    path[col] = farthest_row
+            column = img[:, col]
+            non_zero = np.nonzero(column)[0]
+            if len(non_zero) > 0:
+                distances = np.abs(non_zero - center_y)
+                weights = 1 / (distances + 1)**2  # 使用平方反比权重以更好地处理离群点
+                weighted_sum = np.sum(non_zero * weights)
+                total_weight = np.sum(weights)
 
+                if col < width * 0.1 or col > width * 0.9:
+                    # 对于前10%和后10%的列，使用最近点
+                    path[col] = non_zero[np.argmin(distances)]
+                else:
+                    # 对于其余的列，使用加权平均
+                    path[col] = weighted_sum / total_weight if total_weight > 0 else center_y
+
+        # 保持原有的插值逻辑
         for col in range(1, width - 1):
             if np.isnan(path[col]):
                 left = col - 1
@@ -1086,15 +1097,30 @@ def extract_and_save_ecg_signal(image, filename, output_folder, units_info, nums
         path = path.astype(int)
         return path
 
-    path = weighted_average_path(img, center_y)
+    # 应用中值滤波来减少噪声
+    img_filtered = cv2.medianBlur(img, 3)
 
+    path = weighted_average_path(img_filtered, center_y)
+
+    # 移除边缘3个像素
     path = path[3:-3]
 
     voltage_per_pixel = units_info["voltage_per_pixel"]
 
     voltage_values = (center_y - path) * voltage_per_pixel
 
-    processed_signal = process_ecg_signal(voltage_values, lead_type, numsamples)
+    # 添加数值检查
+    print(f"Voltage values - min: {np.min(voltage_values)}, max: {np.max(voltage_values)}")
+
+    # 限幅电压值
+    voltage_values = np.clip(voltage_values, -5, 5)  # 假设ECG信号的正常范围是 ±5mV
+
+    # 应用Savitzky-Golay滤波器来平滑信号
+    window_length = 15  # 必须是奇数
+    poly_order = 3  # 必须小于window_length
+    voltage_values_smooth = savgol_filter(voltage_values, window_length, poly_order)
+
+    processed_signal = process_ecg_signal(voltage_values_smooth, lead_type, numsamples)
 
     signal_file_path = os.path.join(digitalization_folder_path, f"{lead_type}_{count}.csv")
     try:
@@ -1102,6 +1128,8 @@ def extract_and_save_ecg_signal(image, filename, output_folder, units_info, nums
         print(f"Saved digitalized signal to {signal_file_path}")
     except Exception as e:
         print(f"Failed to save digitalized signal: {e}")
+
+    # return processed_signal
 
 def group_and_rename_files(input_directory, output_directory):
     if not os.path.exists(output_directory):
@@ -1145,7 +1173,7 @@ def group_and_rename_files(input_directory, output_directory):
         for file in group:
             print(f"  {os.path.join(input_directory, file)}")
 
-def integrate_grouped_files_to_p_signal(grouped_folder, output_folder):
+def integrate_grouped_files_to_p_signal(grouped_folder, output_folder, num_samples):
     lead_order = ["I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"]
     integrated_signal = []
 
@@ -1154,9 +1182,14 @@ def integrate_grouped_files_to_p_signal(grouped_folder, output_folder):
         file_path = os.path.join(grouped_folder, filename)
         if os.path.exists(file_path):
             signal = np.loadtxt(file_path, delimiter=',')
+            # 添加限幅
+            signal = np.clip(signal, -32767, 32767)
             integrated_signal.append(signal)
         else:
             print(f"Warning: {filename} not found in {grouped_folder}")
+            # 如果文件不存在，用零填充
+            integrated_signal.append(np.zeros(num_samples // 4))
+
 
     integrated_signal = np.array(integrated_signal).T
 
