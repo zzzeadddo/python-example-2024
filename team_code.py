@@ -1188,7 +1188,7 @@ def integrate_grouped_files_to_p_signal(grouped_folder, output_folder, num_sampl
         else:
             print(f"Warning: {filename} not found in {grouped_folder}")
             # 如果文件不存在，用零填充
-            integrated_signal.append(np.zeros(num_samples // 4))
+            integrated_signal.append(np.zeros(num_samples))
 
 
     integrated_signal = np.array(integrated_signal).T
