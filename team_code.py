@@ -124,7 +124,8 @@ def run_models(record, digitization_model, classification_model, verbose):
         file_namezeze = os.path.basename(base_path)
 
         search_pattern = os.path.join(base_directory, f'*{file_namezeze}*')
-        files = [f for f in glob.glob(search_pattern) if f.lower().endswith(('.jpg', '.jpeg', '.png', 'tiff'))]
+        files = [f for f in glob.glob(search_pattern) if
+                 f.lower().endswith(('.jpg', '.jpeg', '.png', '.tiff', '.bmp', '.gif'))]
 
         if not files:
             raise FileNotFoundError("No files found matching the pattern.")
@@ -272,7 +273,7 @@ def process_image(file_name):
     file_path = os.path.join(file_name)
     print(f"Processing image {file_name}...")
     # 读取图片
-    image = cv2.imread(file_path, cv2.IMREAD_COLOR)  # 使用IMREAD_COLOR读取彩色图片
+    image = cv2.imread(file_path, cv2.IMREAD_COLOR)
 
     if image is None:
         print(f"Failed to load image {file_path}")
@@ -289,7 +290,22 @@ def process_image(file_name):
     corrected_image = rotate(image, angle)
 
     # 保存处理后的图片，替换原图
-    cv2.imwrite(file_path, corrected_image)
+    file_extension = os.path.splitext(file_name)[1].lower()
+    if file_extension in ['.jpg', '.jpeg']:
+        cv2.imwrite(file_path, corrected_image, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+    elif file_extension == '.png':
+        cv2.imwrite(file_path, corrected_image, [int(cv2.IMWRITE_PNG_COMPRESSION), 9])
+    elif file_extension == '.tiff':
+        cv2.imwrite(file_path, corrected_image)
+    elif file_extension == '.bmp':
+        cv2.imwrite(file_path, corrected_image)
+    elif file_extension == '.gif':
+        # OpenCV不直接支持GIF，可能需要使用其他库如Pillow来处理
+        pil_image = Image.fromarray(cv2.cvtColor(corrected_image, cv2.COLOR_BGR2RGB))
+        pil_image.save(file_path, 'GIF')
+    else:
+        cv2.imwrite(file_path, corrected_image)
+
     print(f"Corrected image saved to {file_path}")
 
 
@@ -298,13 +314,26 @@ def compress_image(file, output_dir, quality=85, max_size=(640, 640)):
         os.makedirs(output_dir)
 
     size_mapping = {}
-    if os.path.isfile(file) and file.lower().endswith(('.jpg', '.jpeg', '.png')):
+    if os.path.isfile(file) and file.lower().endswith(('.jpg', '.jpeg', '.png', '.tiff', '.bmp', '.gif')):
         file_name = os.path.basename(file)
         output_path = os.path.join(output_dir, file_name)
         img = Image.open(file)
         original_size = img.size
         img.thumbnail(max_size)
-        img.save(output_path, quality=quality)
+
+        # 根据文件扩展名选择保存格式
+        file_extension = os.path.splitext(file_name)[1].lower()
+        if file_extension in ['.jpg', '.jpeg']:
+            img.save(output_path, 'JPEG', quality=quality)
+        elif file_extension == '.png':
+            img.save(output_path, 'PNG')
+        elif file_extension == '.tiff':
+            img.save(output_path, 'TIFF')
+        elif file_extension == '.bmp':
+            img.save(output_path, 'BMP')
+        elif file_extension == '.gif':
+            img.save(output_path, 'GIF')
+
         compressed_size = img.size
         size_mapping[file_name] = (original_size, compressed_size)
 
@@ -322,9 +351,9 @@ def process_images_with_yolo(model_path, input_folder, output_base_folder, text_
         ["V4", "V5", "V6"]
     ]
 
-    for filename in os.listdir(input_folder):  # 遍历输入文件夹中的所有文件
-        if filename.endswith(('.png', '.jpg', '.jpeg')):  # 检查文件是否为图像文件
-            image_path = os.path.join(input_folder, filename)  # 获取图像文件路径
+    for filename in os.listdir(input_folder):
+        if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.gif')):
+            image_path = os.path.join(input_folder, filename)
             print(f"Processing file: {image_path}")
 
             if not os.path.exists(image_path):
@@ -580,59 +609,82 @@ def process_images_with_yolo(model_path, input_folder, output_base_folder, text_
                 #     print(
                 #         f"Group {key} contains {len(values)} text boxes, average bottom y: {avg_bottom_y_values[key]}")
 
-                # 提取所有文本框的下边界值
-                bottom_ys = np.array([box[3] for _, box, _, _ in text_boxes]).reshape(-1, 1)
-                # print(f"Bottom y values: {bottom_ys}")
+                def estimate_zero_lines(items, is_text=True):
+                    print(f"Entering estimate_zero_lines function. is_text: {is_text}")
+                    print(f"Number of items: {len(items)}")
+                    print(f"Sample of first few items: {items[:5]}")  # 打印前5个项目作为样本
 
-                # 计算eps值为最大值和最小值之间差值的四分之一
-                max_y = np.max(bottom_ys)
-                min_y = np.min(bottom_ys)
-                eps = (max_y - min_y) * 0.1428
-                print(f"Calculated eps: {eps}")
+                    try:
+                        bottom_ys = np.array([item[3] for item in items]).reshape(-1, 1)
 
-                # 使用DBSCAN进行聚类
-                dbscan = DBSCAN(eps=eps, min_samples=1).fit(bottom_ys)
+                        max_y = np.max(bottom_ys)
+                        min_y = np.min(bottom_ys)
+                        eps = (max_y - min_y) * 0.1428
+                        print(f"Calculated eps: {eps}")
 
-                # 获取聚类结果
-                labels = dbscan.labels_
+                        clustering = DBSCAN(eps=eps, min_samples=1).fit(bottom_ys)
 
-                # 按照聚类结果分组
-                text_boxes_by_line = {}
-                for label, (_, box, _, _) in zip(labels, text_boxes):
-                    if label not in text_boxes_by_line:
-                        text_boxes_by_line[label] = []
-                    text_boxes_by_line[label].append(box[3])
+                        labels = clustering.labels_
+                        items_by_line = {}
+                        for label, item in zip(labels, items):
+                            if label not in items_by_line:
+                                items_by_line[label] = []
+                            items_by_line[label].append(item[3])
 
-                # 输出分组数量
-                num_groups = len(set(labels)) - (1 if -1 in labels else 0)
-                print(f"Number of groups: {num_groups}")  # 不计入噪声点
+                        filtered_items_by_line = {}
+                        for label, values in items_by_line.items():
+                            median_y = np.median(values)
+                            threshold = 20
+                            filtered_values = [y for y in values if abs(y - median_y) <= threshold]
+                            filtered_items_by_line[label] = filtered_values
 
-                # 滤除类内离群点
-                filtered_text_boxes_by_line = {}
-                for label, boxes in text_boxes_by_line.items():
-                    median_y = np.median(boxes)
-                    threshold = 20  # 定义离群点阈值，可以根据需要调整
-                    filtered_boxes = [y for y in boxes if abs(y - median_y) <= threshold]
-                    filtered_text_boxes_by_line[label] = filtered_boxes
+                        avg_bottom_y_values = {}
+                        for key, values in filtered_items_by_line.items():
+                            avg_bottom_y_values[key] = np.mean(values)
+                            print(
+                                f"Group {key} contains {len(values)} items, average bottom y: {avg_bottom_y_values[key]}")
 
-                avg_bottom_y_values = {}
-                for key, values in filtered_text_boxes_by_line.items():
-                    avg_bottom_y_values[key] = np.mean(values)
-                    print(
-                        f"Group {key} contains {len(values)} text boxes, average bottom y: {avg_bottom_y_values[key]}")
+                        zero_lines = {}
+                        for key, avg_y in avg_bottom_y_values.items():
+                            if is_text:
+                                if len(filtered_items_by_line) > 4:
+                                    zero_line_y = avg_y - dpi * 0.32
+                                else:
+                                    zero_line_y = avg_y - dpi * (
+                                        0.37 if len(filtered_items_by_line[key]) <= 2 else 0.32)
+                            else:
+                                zero_line_y = avg_y - dpi * 0.15
 
+                            zero_lines[key] = zero_line_y
+                            print(f"Zero line for group {key} at y: {zero_line_y}")
 
-                zero_lines = {}
-                for key, avg_y in avg_bottom_y_values.items():
-                    if num_groups > 4:
-                        zero_line_y = avg_y - dpi * 0.32  # 统一的矫正inch为0.32
+                        return zero_lines
+                    except Exception as e:
+                        print(f"Error in estimate_zero_lines: {str(e)}")
+                        print(f"Error occurred at item: {items[labels.tolist().index(key)]}")
+                        return {}
+
+                # 在调用estimate_zero_lines之前添加调试输出
+                print("Debug: Texts structure")
+                print(f"Number of texts: {len(texts)}")
+                print(f"Sample of texts: {texts[:5]}")
+
+                print("Debug: Columns structure")
+                for i, column in enumerate(columns):
+                    print(f"Column {i}: {len(column)} items")
+                    print(f"Sample of column {i}: {column[:2]}")
+
+                try:
+                    if len(texts) >= 4:
+                        print("Using text-based zero line estimation.")
+                        zero_lines = estimate_zero_lines(texts, is_text=True)
                     else:
-                        if len(text_boxes_by_line[key]) <= 2:
-                            zero_line_y = avg_y - dpi * 0.37  # 矫正的inch为0.37
-                        else:
-                            zero_line_y = avg_y - dpi * 0.32  # 矫正的inch为0.32
-                    zero_lines[key] = zero_line_y
-                    print(f"Zero line for group {key} at y: {zero_line_y}")
+                        print("Not enough text detected. Using lead-based zero line estimation.")
+                        all_leads = [item for column in columns for item in column]
+                        zero_lines = estimate_zero_lines(all_leads, is_text=False)
+                except Exception as e:
+                    print(f"Error during zero line estimation: {str(e)}")
+                    zero_lines = {}
 
                 lead_count = {}
                 for col_idx, column in enumerate(columns):
@@ -1011,7 +1063,7 @@ def process_all_images_in_folder(input_folder):
 
     for filename in os.listdir(input_folder):
         file_path = os.path.join(input_folder, filename)
-        if os.path.isfile(file_path) and filename.lower().endswith((".png", ".jpg", ".jpeg", ".tiff")):
+        if os.path.isfile(file_path) and filename.lower().endswith((".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".gif")):
             processed_img, processed_filename = process_image_and_save(file_path)
             if processed_img is not None:
                 processed_images.append((processed_filename, processed_img))
