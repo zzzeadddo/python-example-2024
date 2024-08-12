@@ -609,60 +609,66 @@ def process_images_with_yolo(model_path, input_folder, output_base_folder, text_
                 #     print(
                 #         f"Group {key} contains {len(values)} text boxes, average bottom y: {avg_bottom_y_values[key]}")
 
-                def estimate_zero_lines(items, is_text=True):
-                    print(f"Entering estimate_zero_lines function. is_text: {is_text}")
-                    print(f"Number of items: {len(items)}")
-                    print(f"Sample of first few items: {items[:5]}")  # 打印前5个项目作为样本
+                def estimate_zero_lines(text_boxes, lead_boxes=None):
+                    print(f"Entering estimate_zero_lines function.")
+                    print(f"Number of text boxes: {len(text_boxes)}")
 
-                    try:
-                        bottom_ys = np.array([item[3] for item in items]).reshape(-1, 1)
+                    if len(text_boxes) < 4 and lead_boxes:
+                        print("Not enough text boxes. Using lead boxes for estimation.")
+                        items = lead_boxes
+                    else:
+                        items = text_boxes
 
-                        max_y = np.max(bottom_ys)
-                        min_y = np.min(bottom_ys)
-                        eps = (max_y - min_y) * 0.1428
-                        print(f"Calculated eps: {eps}")
-
-                        clustering = DBSCAN(eps=eps, min_samples=1).fit(bottom_ys)
-
-                        labels = clustering.labels_
-                        items_by_line = {}
-                        for label, item in zip(labels, items):
-                            if label not in items_by_line:
-                                items_by_line[label] = []
-                            items_by_line[label].append(item[3])
-
-                        filtered_items_by_line = {}
-                        for label, values in items_by_line.items():
-                            median_y = np.median(values)
-                            threshold = 20
-                            filtered_values = [y for y in values if abs(y - median_y) <= threshold]
-                            filtered_items_by_line[label] = filtered_values
-
-                        avg_bottom_y_values = {}
-                        for key, values in filtered_items_by_line.items():
-                            avg_bottom_y_values[key] = np.mean(values)
-                            print(
-                                f"Group {key} contains {len(values)} items, average bottom y: {avg_bottom_y_values[key]}")
-
-                        zero_lines = {}
-                        for key, avg_y in avg_bottom_y_values.items():
-                            if is_text:
-                                if len(filtered_items_by_line) > 4:
-                                    zero_line_y = avg_y - dpi * 0.32
-                                else:
-                                    zero_line_y = avg_y - dpi * (
-                                        0.37 if len(filtered_items_by_line[key]) <= 2 else 0.32)
-                            else:
-                                zero_line_y = avg_y - dpi * 0.15
-
-                            zero_lines[key] = zero_line_y
-                            print(f"Zero line for group {key} at y: {zero_line_y}")
-
-                        return zero_lines
-                    except Exception as e:
-                        print(f"Error in estimate_zero_lines: {str(e)}")
-                        print(f"Error occurred at item: {items[labels.tolist().index(key)]}")
+                    if not items:
+                        print("No items to estimate zero lines. Returning empty dict.")
                         return {}
+
+                    bottom_ys = np.array([box[1][3] for box in items]).reshape(-1, 1)
+
+                    max_y = np.max(bottom_ys)
+                    min_y = np.min(bottom_ys)
+                    eps = (max_y - min_y) * 0.1428
+                    print(f"Calculated eps: {eps}")
+
+                    clustering = DBSCAN(eps=eps, min_samples=1).fit(bottom_ys)
+
+                    labels = clustering.labels_
+
+                    items_by_line = defaultdict(list)
+                    for label, (_, box, _, _) in zip(labels, items):
+                        items_by_line[label].append(box[3])
+
+                    num_groups = len(set(labels)) - (1 if -1 in labels else 0)
+                    print(f"Number of groups: {num_groups}")
+
+                    filtered_items_by_line = {}
+                    for label, values in items_by_line.items():
+                        median_y = np.median(values)
+                        threshold = 20
+                        filtered_values = [y for y in values if abs(y - median_y) <= threshold]
+                        filtered_items_by_line[label] = filtered_values
+
+                    avg_bottom_y_values = {}
+                    for key, values in filtered_items_by_line.items():
+                        avg_bottom_y_values[key] = np.mean(values)
+                        print(f"Group {key} contains {len(values)} items, average bottom y: {avg_bottom_y_values[key]}")
+
+                    zero_lines = {}
+                    for key, avg_y in avg_bottom_y_values.items():
+                        if len(text_boxes) < 4 and lead_boxes:
+                            zero_line_y = avg_y - dpi * 0.15
+                        elif num_groups > 4:
+                            zero_line_y = avg_y - dpi * 0.32
+                        else:
+                            if len(items_by_line[key]) <= 2:
+                                zero_line_y = avg_y - dpi * 0.37
+                            else:
+                                zero_line_y = avg_y - dpi * 0.32
+
+                        zero_lines[key] = zero_line_y
+                        print(f"Zero line for group {key} at y: {zero_line_y}")
+
+                    return zero_lines
 
                 # 在调用estimate_zero_lines之前添加调试输出
                 print("Debug: Texts structure")
@@ -674,16 +680,19 @@ def process_images_with_yolo(model_path, input_folder, output_base_folder, text_
                     print(f"Column {i}: {len(column)} items")
                     print(f"Sample of column {i}: {column[:2]}")
 
+                # 准备文本框和导联框数据
+                text_boxes = [(center_y, box, center_x, center_y) for center_y, box, center_x, center_y in text_boxes]
+                all_leads = [item for column in columns for item in column]
+
+                # 调用 estimate_zero_lines 函数
                 try:
-                    if len(texts) >= 4:
-                        print("Using text-based zero line estimation.")
-                        zero_lines = estimate_zero_lines(texts, is_text=True)
-                    else:
-                        print("Not enough text detected. Using lead-based zero line estimation.")
-                        all_leads = [item for column in columns for item in column]
-                        zero_lines = estimate_zero_lines(all_leads, is_text=False)
+                    zero_lines = estimate_zero_lines(text_boxes, all_leads)
+                    if not zero_lines:  # 如果返回空字典，使用备用方法
+                        print("Zero line estimation failed. Using fallback method.")
+                        # 这里可以添加一个备用的零线估计方法
                 except Exception as e:
                     print(f"Error during zero line estimation: {str(e)}")
+                    print("Using fallback method for zero lines.")
                     zero_lines = {}
 
                 lead_count = {}
