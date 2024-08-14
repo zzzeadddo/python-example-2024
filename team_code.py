@@ -182,6 +182,8 @@ def run_models(record, digitization_model, classification_model, verbose):
                 if img is None:
                     print(f"Error reading image {img_input}, skipping...")
                     continue
+                brightness_increase = 90
+                img = cv2.convertScaleAbs(img, alpha=1, beta=brightness_increase)
 
                 img, original_size = pad_image(img, TILE_SIZE)
                 locations, patches = get_patches_dynamic(img, TILE_SIZE)
