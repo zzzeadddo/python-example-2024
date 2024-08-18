@@ -1255,5 +1255,6 @@ def integrate_grouped_files_to_p_signal(grouped_folder, output_folder, num_sampl
 
 
     integrated_signal = np.array(integrated_signal).T
+    integrated_signal += np.random.normal(0, 0.001, integrated_signal.shape)
 
     return integrated_signal
